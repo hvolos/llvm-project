@@ -80,6 +80,11 @@ static cl::opt<bool>
     RV64LegalI32("riscv-experimental-rv64-legal-i32", cl::ReallyHidden,
                  cl::desc("Make i32 a legal type for SelectionDAG on RV64."));
 
+static cl::opt<bool>
+    CustomLegalizeSHL("custom-legalize-shl", cl::Hidden,
+                     cl::desc("Legalize SHL using ADD"),
+                     cl::init(false));
+
 RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
                                          const RISCVSubtarget &STI)
     : TargetLowering(TM), Subtarget(STI) {
@@ -240,6 +245,10 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
 
   // TODO: add all necessary setOperationAction calls.
   setOperationAction(ISD::DYNAMIC_STACKALLOC, XLenVT, Expand);
+
+  if (CustomLegalizeSHL) {
+    setOperationAction(ISD::SHL, MVT::i32, Custom);
+  }
 
   setOperationAction(ISD::BR_JT, MVT::Other, Expand);
   setOperationAction(ISD::BR_CC, XLenVT, Expand);
@@ -6863,6 +6872,7 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
   case ISD::CTPOP:
     return lowerToScalableOp(Op, DAG);
   case ISD::SHL:
+    return replaceShlWithAdd(Op, DAG);  
   case ISD::SRA:
   case ISD::SRL:
     if (Op.getSimpleValueType().isFixedLengthVector())
@@ -7118,6 +7128,30 @@ SDValue RISCVTargetLowering::LowerOperation(SDValue Op,
   case ISD::EXPERIMENTAL_VP_REVERSE:
     return lowerVPReverseExperimental(Op, DAG);
   }
+}
+
+SDValue RISCVTargetLowering::replaceShlWithAdd(SDValue Op, SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue finalReplacement;
+
+  SDValue num = Op.getOperand(0);
+  EVT VT = num.getValueType();
+
+  SDValue shamtOp = Op.getOperand(1);
+
+  if (DAG.isConstantIntBuildVectorOrConstantInt(shamtOp)) {
+    uint64_t shamt = Op.getConstantOperandVal(1);
+
+    for (int i = 0; i < shamt; i++) {
+      num = DAG.getNode(ISD::ADD, DL, VT, num, num);
+    }
+
+    finalReplacement = num;
+  }
+  else {
+    // TODO
+  }
+  return finalReplacement;
 }
 
 static SDValue getTargetNode(GlobalAddressSDNode *N, const SDLoc &DL, EVT Ty,
